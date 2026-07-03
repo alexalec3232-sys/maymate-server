@@ -16,6 +16,7 @@ try {
 }
 
 const app = express();
+
 app.use(cors());
 app.use(express.json({ limit: "20mb" }));
 
@@ -100,7 +101,9 @@ app.get("/health", (req, res) => {
   res.json({
     status: "online",
     message: "Maymate backend online",
-    chatModel: CHAT_MODEL
+    chatModel: CHAT_MODEL,
+    visionModel: VISION_MODEL,
+    sttModel: STT_MODEL
   });
 });
 
@@ -113,8 +116,13 @@ app.post("/chat", async (req, res) => {
   console.log("👤 USER:", message);
   console.log("🖼️ HAS IMAGE:", !!imageBase64);
   console.log("📚 HISTORY COUNT:", Array.isArray(history) ? history.length : 0);
+  console.log("🚀 CURRENT CHAT MODEL:", CHAT_MODEL);
 
   try {
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error("Missing OPENAI_API_KEY");
+    }
+
     const cleanMessage =
       typeof message === "string" && message.trim()
         ? message.trim()
@@ -183,10 +191,7 @@ ${systemPrompt || ""}
                 ? "user"
                 : "assistant";
 
-            const content =
-              item.content ||
-              item.text ||
-              "";
+            const content = item.content || item.text || "";
 
             return {
               role,
@@ -212,13 +217,10 @@ ${systemPrompt || ""}
       }
     ];
 
-    console.log("📦 FINAL SYSTEM:", finalSystemPrompt);
-    console.log("📨 FINAL MESSAGES:", JSON.stringify(messages, null, 2));
     console.log("🎛️ MAX TOKENS:", maxTokens);
-    console.log("🚀 CURRENT CHAT MODEL:", CHAT_MODEL);
 
     const completion = await openai.chat.completions.create({
-      model: CHAT_MODEL,
+      model: imageBase64 ? VISION_MODEL : CHAT_MODEL,
       messages,
       max_tokens: maxTokens
     });
@@ -270,7 +272,7 @@ app.get("/web-search", async (req, res) => {
       {
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${process.env.TAVILY_API_KEY}`
+          Authorization: `Bearer ${process.env.TAVILY_API_KEY}`
         },
         timeout: 12000
       }
