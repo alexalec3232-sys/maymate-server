@@ -40,8 +40,8 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const CHAT_MODEL = "gpt-4.1-mini";
-const VISION_MODEL = "gpt-4.1-mini";
+const CHAT_MODEL = "gpt-5.6-terra";
+const VISION_MODEL = "gpt-5.6-terra";
 const STT_MODEL = "whisper-1";
 
 async function toSimplifiedChinese(text) {
@@ -80,16 +80,20 @@ function buildImageUserContent(text, imageBase64) {
   const safeMimeType = detectImageMimeType(imageBase64);
 
   return [
+    function buildImageUserContent(text, imageBase64) {
+  const safeMimeType = detectImageMimeType(imageBase64);
+
+  return [
     {
-      type: "text",
+      type: "input_text",
       text
     },
     {
-      type: "image_url",
-      image_url: {
-        url: `data:${safeMimeType};base64,${imageBase64}`
-      }
+      type: "input_image",
+      image_url: `data:${safeMimeType};base64,${imageBase64}`
     }
+  ];
+}
   ];
 }
 
@@ -151,7 +155,7 @@ app.post("/chat", async (req, res) => {
       cleanMessage.includes("只能说") ||
       cleanMessage.includes("只说") ||
       cleanMessage.includes("只回");
-
+const CHAT_MODEL = "gpt-4.1-mini";
     const maxTokens = isForceShort
   ? 400
   : imageBase64
@@ -221,31 +225,53 @@ ${systemPrompt || ""}
 
     console.log("🎛️ MAX TOKENS:", maxTokens);
 
-    const completion = await openai.chat.completions.create({
-      model: imageBase64 ? VISION_MODEL : CHAT_MODEL,
-      messages,
-      max_tokens: maxTokens
-    });
+   const response = await openai.responses.create({
+  model: imageBase64 ? VISION_MODEL : CHAT_MODEL,
 
-   const choice = completion.choices?.[0];
+  instructions: finalSystemPrompt,
+
+  input: [
+    ...historyMessages,
+    {
+      role: "user",
+      content: userContent
+    }
+  ],
+
+  reasoning: {
+    effort: "low"
+  },
+
+  text: {
+    verbosity: isForceShort
+      ? "low"
+      : isLongTask
+        ? "high"
+        : "medium"
+  },
+
+  max_output_tokens: maxTokens
+});
 
 const reply =
-  choice?.message?.content ||
+  response.output_text?.trim() ||
   "抱歉，我现在没组织好回答。";
 
 const finishReason =
-  choice?.finish_reason || "unknown";
+  response.status || "unknown";
 
 console.log("✅ AI返回：", reply);
-console.log("🏁 FINISH REASON:", finishReason);
+console.log("🏁 RESPONSE STATUS:", finishReason);
 console.log("📏 REPLY CHARS:", reply.length);
 console.log("🎛️ USED MAX TOKENS:", maxTokens);
+console.log("🤖 USED MODEL:", response.model || CHAT_MODEL);
 
 return res.json({
   reply,
   finishReason,
   replyLength: reply.length,
-  maxTokens
+  maxTokens,
+  model: response.model || CHAT_MODEL
 });
   } catch (e) {
     console.log("❌ 聊天接口报错:", e);
