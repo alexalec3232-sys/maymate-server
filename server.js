@@ -152,11 +152,13 @@ app.post("/chat", async (req, res) => {
       cleanMessage.includes("只说") ||
       cleanMessage.includes("只回");
 
-    const maxTokens = imageBase64
-      ? 700
-      : isLongTask && !isForceShort
-        ? 900
-        : 260;
+    const maxTokens = isForceShort
+  ? 400
+  : imageBase64
+    ? 2200
+    : isLongTask
+      ? 3500
+      : 2200;
 
     let finalSystemPrompt = `
 ${systemPrompt || ""}
@@ -225,13 +227,26 @@ ${systemPrompt || ""}
       max_tokens: maxTokens
     });
 
-    const reply =
-      completion.choices?.[0]?.message?.content ||
-      "抱歉，我现在没组织好回答。";
+   const choice = completion.choices?.[0];
 
-    console.log("✅ AI返回：", reply);
+const reply =
+  choice?.message?.content ||
+  "抱歉，我现在没组织好回答。";
 
-    return res.json({ reply });
+const finishReason =
+  choice?.finish_reason || "unknown";
+
+console.log("✅ AI返回：", reply);
+console.log("🏁 FINISH REASON:", finishReason);
+console.log("📏 REPLY CHARS:", reply.length);
+console.log("🎛️ USED MAX TOKENS:", maxTokens);
+
+return res.json({
+  reply,
+  finishReason,
+  replyLength: reply.length,
+  maxTokens
+});
   } catch (e) {
     console.log("❌ 聊天接口报错:", e);
 
