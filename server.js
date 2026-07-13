@@ -42,8 +42,8 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const CHAT_MODEL = "gpt-4.1-mini";
-const VISION_MODEL = "gpt-4.1-mini";
+const CHAT_MODEL = "gpt-5.6-terra";
+const VISION_MODEL = "gpt-5.6-terra";
 const STT_MODEL = "whisper-1";
 
 async function toSimplifiedChinese(text) {
@@ -104,19 +104,20 @@ function detectImageMimeType(base64) {
   return "image/jpeg";
 }
 
+/**
+ * Responses API 图片消息格式。
+ */
 function buildImageUserContent(text, imageBase64) {
   const mimeType = detectImageMimeType(imageBase64);
 
   return [
     {
-      type: "text",
+      type: "input_text",
       text
     },
     {
-      type: "image_url",
-      image_url: {
-        url: `data:${mimeType};base64,${imageBase64}`
-      }
+      type: "input_image",
+      image_url: `data:${mimeType};base64,${imageBase64}`
     }
   ];
 }
@@ -188,6 +189,35 @@ function resolveMaxTokens({
   return 2200;
 }
 
+/**
+ * 把 Android 历史消息转成 Responses API 可接受的输入。
+ */
+function buildHistoryMessages(history) {
+  if (!Array.isArray(history)) {
+    return [];
+  }
+
+  return history
+    .slice(-10)
+    .map((item) => {
+      const role =
+        item.role === "user" || item.isUser === true
+          ? "user"
+          : "assistant";
+
+      const content =
+        item.content ||
+        item.text ||
+        "";
+
+      return {
+        role,
+        content: String(content).trim()
+      };
+    })
+    .filter((item) => item.content.length > 0);
+}
+
 app.get("/", (req, res) => {
   res.send("Maymate backend is running");
 });
@@ -198,7 +228,8 @@ app.get("/health", (req, res) => {
     message: "Maymate backend online",
     chatModel: CHAT_MODEL,
     visionModel: VISION_MODEL,
-    sttModel: STT_MODEL
+    sttModel: STT_MODEL,
+    apiMode: "responses"
   });
 });
 
@@ -250,10 +281,10 @@ ${systemPrompt || ""}
 2. 用户要求完成任务时，必须直接完成，不要只讲方法。
 3. 用户要求“写作文、写一篇、翻译、总结、改句子、写代码、列计划、起标题、写文案”时，直接输出成品。
 4. 用户说“只能回我嗯”“接下来只说嗯”“只回某句话”这类临时规则时，必须照做，除非涉及危险、违法或明显不安全内容。
-5. 用户只是打招呼、随口聊天或发出简单确认时，默认保持简洁。
+5. 用户只是打招呼、随口聊天或简单确认时，默认保持简洁。
 6. 不要把普通抱怨自动扩展成人生分析、关系分析或系统性报告。
-7. 如果用户要求“简洁点、短一点、说重点、直接点”，必须压缩，只保留核心。
-8. 如果 Android 端已经提供了明确的回复结构、分析深度和长度要求，优先服从 Android 端 systemPrompt。
+7. 用户要求“简洁点、短一点、说重点、直接点”时，必须压缩，只保留核心。
+8. Android 端已经提供明确回复结构、分析深度和长度要求时，优先服从 Android 端 systemPrompt。
 `.trim();
 
     if (imageBase64) {
@@ -267,96 +298,98 @@ ${systemPrompt || ""}
 `.trim();
     }
 
-    const historyMessages = Array.isArray(history)
-      ? history
-          .slice(-10)
-          .map((item) => {
-            const role =
-              item.role === "user" || item.isUser === true
-                ? "user"
-                : "assistant";
+    const historyMessages =
+      buildHistoryMessages(history);
 
-            const content =
-              item.content ||
-              item.text ||
-              "";
+    const currentUserMessage = {
+      role: "user",
+      content: imageBase64
+        ? buildImageUserContent(
+            cleanMessage,
+            imageBase64
+          )
+        : cleanMessage
+    };
 
-            return {
-              role,
-              content: String(content).trim()
-            };
-          })
-          .filter((item) => item.content.length > 0)
-      : [];
-
-    const userContent = imageBase64
-      ? buildImageUserContent(
-          cleanMessage,
-          imageBase64
-        )
-      : cleanMessage;
-
-    const messages = [
-      {
-        role: "system",
-        content: finalSystemPrompt
-      },
+    const input = [
       ...historyMessages,
-      {
-        role: "user",
-        content: userContent
-      }
+      currentUserMessage
     ];
 
     console.log("🧭 LONG TASK:", isLongTask);
     console.log("✂️ FORCE SHORT:", isForceShort);
-    console.log("🎛️ MAX TOKENS:", maxTokens);
+    console.log("🎛️ MAX OUTPUT TOKENS:", maxTokens);
 
-    const completion =
-      await openai.chat.completions.create({
+    /**
+     * 先只使用已验证的基础参数。
+     *
+     * 暂时不传：
+     * reasoning
+     * text.verbosity
+     * temperature
+     *
+     * 避免再次出现模型参数不兼容。
+     */
+    const response =
+      await openai.responses.create({
         model: imageBase64
           ? VISION_MODEL
           : CHAT_MODEL,
 
-        messages,
+        instructions: finalSystemPrompt,
 
-        max_tokens: maxTokens
+        input,
+
+        max_output_tokens: maxTokens
       });
 
-    const choice = completion.choices?.[0];
-
     const reply =
-      choice?.message?.content?.trim() ||
+      response.output_text?.trim() ||
       "抱歉，我现在没组织好回答。";
 
-    const finishReason =
-      choice?.finish_reason ||
+    const responseStatus =
+      response.status ||
       "unknown";
+
+    const incompleteReason =
+      response.incomplete_details?.reason ||
+      null;
 
     console.log("✅ AI返回：", reply);
     console.log(
-      "🏁 FINISH REASON:",
-      finishReason
+      "🏁 RESPONSE STATUS:",
+      responseStatus
+    );
+    console.log(
+      "⚠️ INCOMPLETE REASON:",
+      incompleteReason || "none"
     );
     console.log(
       "📏 REPLY CHARS:",
       reply.length
     );
     console.log(
-      "🎛️ USED MAX TOKENS:",
+      "🎛️ USED MAX OUTPUT TOKENS:",
       maxTokens
     );
     console.log(
       "🤖 USED MODEL:",
-      completion.model || CHAT_MODEL
+      response.model || CHAT_MODEL
     );
 
     return res.json({
       reply,
-      finishReason,
+      finishReason:
+        incompleteReason ||
+        responseStatus,
+
+      responseStatus,
+      incompleteReason,
       replyLength: reply.length,
       maxTokens,
-      model: completion.model || CHAT_MODEL
+      model:
+        response.model ||
+        CHAT_MODEL
     });
   } catch (error) {
     console.log(
@@ -370,7 +403,10 @@ ${systemPrompt || ""}
         (error?.message || "未知错误"),
 
       error:
-        error?.message || "未知错误"
+        error?.message || "未知错误",
+
+      status:
+        error?.status || 500
     });
   }
 });
@@ -440,9 +476,11 @@ app.get("/web-search", async (req, res) => {
 
     return res.json({
       query: cleanQuery,
+
       answer:
         tavilyResponse.data?.answer ||
         "",
+
       results
     });
   } catch (error) {
