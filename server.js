@@ -31,8 +31,13 @@ const storage = multer.diskStorage({
   },
 
   filename(req, file, callback) {
-    const extension = path.extname(file.originalname) || ".m4a";
-    callback(null, `${Date.now()}${extension}`);
+    const extension =
+      path.extname(file.originalname) || ".m4a";
+
+    callback(
+      null,
+      `${Date.now()}${extension}`
+    );
   }
 });
 
@@ -42,9 +47,97 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const CHAT_MODEL = "gpt-5.6-terra";
-const VISION_MODEL = "gpt-5.6-terra";
+/**
+ * 模型档位。
+ *
+ * CORE：
+ * 默认档位，使用 GPT-4.1 mini。
+ *
+ * PREMIUM：
+ * 高级档位，使用 GPT-5.6 Terra。
+ */
+const MODEL_TIER = {
+  CORE: "core",
+  PREMIUM: "premium"
+};
+
+/**
+ * 所有具体模型名称只在这里配置。
+ *
+ * Android 和其他业务代码只需要传：
+ *
+ * core
+ * premium
+ *
+ * 不需要知道具体模型名称。
+ */
+const MODEL_CONFIG = {
+  [MODEL_TIER.CORE]: {
+    chat: "gpt-4.1-mini",
+    vision: "gpt-4.1-mini"
+  },
+
+  [MODEL_TIER.PREMIUM]: {
+    chat: "gpt-5.6-terra",
+    vision: "gpt-5.6-terra"
+  }
+};
+
+/**
+ * Android 没有传 modelTier 时，
+ * 默认使用便宜的 CORE 模型。
+ */
+const DEFAULT_MODEL_TIER =
+  MODEL_TIER.CORE;
+
 const STT_MODEL = "whisper-1";
+
+/**
+ * 清理并验证模型档位。
+ *
+ * 只有明确传入 premium，
+ * 才允许使用 GPT-5.6。
+ *
+ * 其他任何值都会安全回退到 core，
+ * 避免因为拼写错误意外消耗高级模型。
+ */
+function normalizeModelTier(modelTier) {
+  const normalized =
+    typeof modelTier === "string"
+      ? modelTier.trim().toLowerCase()
+      : "";
+
+  if (
+    normalized === MODEL_TIER.PREMIUM
+  ) {
+    return MODEL_TIER.PREMIUM;
+  }
+
+  return DEFAULT_MODEL_TIER;
+}
+
+/**
+ * 根据模型档位和是否包含图片，
+ * 选择最终调用的模型。
+ */
+function resolveModel({
+  modelTier,
+  hasImage
+}) {
+  const normalizedTier =
+    normalizeModelTier(modelTier);
+
+  const config =
+    MODEL_CONFIG[normalizedTier];
+
+  return {
+    tier: normalizedTier,
+
+    model: hasImage
+      ? config.vision
+      : config.chat
+  };
+}
 
 async function toSimplifiedChinese(text) {
   if (!text) {
@@ -56,8 +149,12 @@ async function toSimplifiedChinese(text) {
   }
 
   try {
-    const converter = new OpenCC("t2s.json");
-    return await converter.convertPromise(text);
+    const converter =
+      new OpenCC("t2s.json");
+
+    return await converter.convertPromise(
+      text
+    );
   } catch (error) {
     console.log(
       "⚠️ 简繁转换失败，返回原文：",
@@ -81,7 +178,10 @@ function safeDeleteFile(filePath) {
 }
 
 function detectImageMimeType(base64) {
-  if (!base64 || typeof base64 !== "string") {
+  if (
+    !base64 ||
+    typeof base64 !== "string"
+  ) {
     return "image/jpeg";
   }
 
@@ -89,7 +189,9 @@ function detectImageMimeType(base64) {
     return "image/jpeg";
   }
 
-  if (base64.startsWith("iVBORw0KGgo")) {
+  if (
+    base64.startsWith("iVBORw0KGgo")
+  ) {
     return "image/png";
   }
 
@@ -107,8 +209,12 @@ function detectImageMimeType(base64) {
 /**
  * Responses API 图片消息格式。
  */
-function buildImageUserContent(text, imageBase64) {
-  const mimeType = detectImageMimeType(imageBase64);
+function buildImageUserContent(
+  text,
+  imageBase64
+) {
+  const mimeType =
+    detectImageMimeType(imageBase64);
 
   return [
     {
@@ -117,7 +223,8 @@ function buildImageUserContent(text, imageBase64) {
     },
     {
       type: "input_image",
-      image_url: `data:${mimeType};base64,${imageBase64}`
+      image_url:
+        `data:${mimeType};base64,${imageBase64}`
     }
   ];
 }
@@ -145,8 +252,9 @@ function detectLongTask(message) {
     "1000字"
   ];
 
-  return longTaskKeywords.some((keyword) =>
-    message.includes(keyword)
+  return longTaskKeywords.some(
+    (keyword) =>
+      message.includes(keyword)
   );
 }
 
@@ -164,8 +272,9 @@ function detectForceShort(message) {
     "别展开"
   ];
 
-  return forceShortKeywords.some((keyword) =>
-    message.includes(keyword)
+  return forceShortKeywords.some(
+    (keyword) =>
+      message.includes(keyword)
   );
 }
 
@@ -190,7 +299,8 @@ function resolveMaxTokens({
 }
 
 /**
- * 把 Android 历史消息转成 Responses API 可接受的输入。
+ * 把 Android 历史消息转成
+ * Responses API 可接受的输入。
  */
 function buildHistoryMessages(history) {
   if (!Array.isArray(history)) {
@@ -201,7 +311,8 @@ function buildHistoryMessages(history) {
     .slice(-10)
     .map((item) => {
       const role =
-        item.role === "user" || item.isUser === true
+        item.role === "user" ||
+        item.isUser === true
           ? "user"
           : "assistant";
 
@@ -212,66 +323,157 @@ function buildHistoryMessages(history) {
 
       return {
         role,
-        content: String(content).trim()
+        content:
+          String(content).trim()
       };
     })
-    .filter((item) => item.content.length > 0);
+    .filter(
+      (item) =>
+        item.content.length > 0
+    );
 }
 
 app.get("/", (req, res) => {
-  res.send("Maymate backend is running");
+  res.send(
+    "Maymate backend is running"
+  );
 });
 
+/**
+ * 健康检查接口。
+ *
+ * 可以用来确认：
+ * 1. 默认模型档位
+ * 2. CORE 模型
+ * 3. PREMIUM 模型
+ * 4. API 模式
+ */
 app.get("/health", (req, res) => {
   res.json({
     status: "online",
-    message: "Maymate backend online",
-    chatModel: CHAT_MODEL,
-    visionModel: VISION_MODEL,
+
+    message:
+      "Maymate backend online",
+
+    defaultModelTier:
+      DEFAULT_MODEL_TIER,
+
+    models: {
+      core:
+        MODEL_CONFIG[
+          MODEL_TIER.CORE
+        ],
+
+      premium:
+        MODEL_CONFIG[
+          MODEL_TIER.PREMIUM
+        ]
+    },
+
     sttModel: STT_MODEL,
+
     apiMode: "responses"
   });
 });
 
 app.post("/chat", async (req, res) => {
-  console.log("🔥 收到手机聊天请求");
+  console.log(
+    "🔥 收到手机聊天请求"
+  );
 
   const {
     message,
     systemPrompt,
     imageBase64,
     history,
-    mode
+    mode,
+    modelTier
   } = req.body;
 
-  console.log("🧠 SYSTEM:", systemPrompt);
-  console.log("👤 USER:", message);
-  console.log("🖼️ HAS IMAGE:", Boolean(imageBase64));
+  /**
+   * 根据 Android 传入的 modelTier
+   * 选择最终模型。
+   *
+   * Android 暂时不传时，
+   * 会自动选择 core。
+   */
+  const selectedModel =
+    resolveModel({
+      modelTier,
+
+      hasImage:
+        Boolean(imageBase64)
+    });
+
+  console.log(
+    "🧠 SYSTEM:",
+    systemPrompt
+  );
+
+  console.log(
+    "👤 USER:",
+    message
+  );
+
+  console.log(
+    "🖼️ HAS IMAGE:",
+    Boolean(imageBase64)
+  );
+
   console.log(
     "📚 HISTORY COUNT:",
-    Array.isArray(history) ? history.length : 0
+    Array.isArray(history)
+      ? history.length
+      : 0
   );
-  console.log("🚀 CURRENT CHAT MODEL:", CHAT_MODEL);
-  console.log("🎚️ MODE:", mode || "default");
+
+  console.log(
+    "🎚️ REQUESTED MODEL TIER:",
+    modelTier || "not provided"
+  );
+
+  console.log(
+    "🧠 SELECTED MODEL TIER:",
+    selectedModel.tier
+  );
+
+  console.log(
+    "🚀 SELECTED MODEL:",
+    selectedModel.model
+  );
+
+  console.log(
+    "🎚️ MODE:",
+    mode || "default"
+  );
 
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      throw new Error("Missing OPENAI_API_KEY");
+    if (
+      !process.env.OPENAI_API_KEY
+    ) {
+      throw new Error(
+        "Missing OPENAI_API_KEY"
+      );
     }
 
     const cleanMessage =
-      typeof message === "string" && message.trim()
+      typeof message === "string" &&
+      message.trim()
         ? message.trim()
         : "请识别这张图片。如果图里有题目、英文、表格或作业内容，请先准确识别，再直接回答。";
 
-    const isLongTask = detectLongTask(cleanMessage);
-    const isForceShort = detectForceShort(cleanMessage);
+    const isLongTask =
+      detectLongTask(cleanMessage);
 
-    const maxTokens = resolveMaxTokens({
-      imageBase64,
-      isLongTask,
-      isForceShort
-    });
+    const isForceShort =
+      detectForceShort(cleanMessage);
+
+    const maxTokens =
+      resolveMaxTokens({
+        imageBase64,
+        isLongTask,
+        isForceShort
+      });
 
     let finalSystemPrompt = `
 ${systemPrompt || ""}
@@ -288,7 +490,8 @@ ${systemPrompt || ""}
 `.trim();
 
     if (imageBase64) {
-      finalSystemPrompt = `${finalSystemPrompt}
+      finalSystemPrompt =
+        `${finalSystemPrompt}
 
 【图片规则】
 1. 用户发送图片时，必须先基于图片内容回答。
@@ -303,6 +506,7 @@ ${systemPrompt || ""}
 
     const currentUserMessage = {
       role: "user",
+
       content: imageBase64
         ? buildImageUserContent(
             cleanMessage,
@@ -316,31 +520,44 @@ ${systemPrompt || ""}
       currentUserMessage
     ];
 
-    console.log("🧭 LONG TASK:", isLongTask);
-    console.log("✂️ FORCE SHORT:", isForceShort);
-    console.log("🎛️ MAX OUTPUT TOKENS:", maxTokens);
+    console.log(
+      "🧭 LONG TASK:",
+      isLongTask
+    );
+
+    console.log(
+      "✂️ FORCE SHORT:",
+      isForceShort
+    );
+
+    console.log(
+      "🎛️ MAX OUTPUT TOKENS:",
+      maxTokens
+    );
 
     /**
-     * 先只使用已验证的基础参数。
+     * CORE 和 PREMIUM
+     * 当前都统一使用 Responses API。
      *
      * 暂时不传：
      * reasoning
      * text.verbosity
      * temperature
      *
-     * 避免再次出现模型参数不兼容。
+     * 避免模型参数不兼容。
      */
     const response =
       await openai.responses.create({
-        model: imageBase64
-          ? VISION_MODEL
-          : CHAT_MODEL,
+        model:
+          selectedModel.model,
 
-        instructions: finalSystemPrompt,
+        instructions:
+          finalSystemPrompt,
 
         input,
 
-        max_output_tokens: maxTokens
+        max_output_tokens:
+          maxTokens
       });
 
     const reply =
@@ -352,44 +569,120 @@ ${systemPrompt || ""}
       "unknown";
 
     const incompleteReason =
-      response.incomplete_details?.reason ||
+      response
+        .incomplete_details
+        ?.reason ||
       null;
 
-    console.log("✅ AI返回：", reply);
+    /**
+     * usage 日志。
+     *
+     * 后面可以用这些数据
+     * 精确计算不同模型成本。
+     */
+    const usage =
+      response.usage || {};
+
+    const inputTokens =
+      usage.input_tokens || 0;
+
+    const cachedInputTokens =
+      usage
+        .input_tokens_details
+        ?.cached_tokens || 0;
+
+    const outputTokens =
+      usage.output_tokens || 0;
+
+    const totalTokens =
+      usage.total_tokens ||
+      inputTokens + outputTokens;
+
+    console.log(
+      "✅ AI返回：",
+      reply
+    );
+
     console.log(
       "🏁 RESPONSE STATUS:",
       responseStatus
     );
+
     console.log(
       "⚠️ INCOMPLETE REASON:",
       incompleteReason || "none"
     );
+
     console.log(
       "📏 REPLY CHARS:",
       reply.length
     );
+
     console.log(
       "🎛️ USED MAX OUTPUT TOKENS:",
       maxTokens
     );
+
     console.log(
       "🤖 USED MODEL:",
-      response.model || CHAT_MODEL
+      response.model ||
+        selectedModel.model
+    );
+
+    console.log(
+      "🧠 USED MODEL TIER:",
+      selectedModel.tier
+    );
+
+    console.log(
+      "💰 INPUT TOKENS:",
+      inputTokens
+    );
+
+    console.log(
+      "♻️ CACHED INPUT TOKENS:",
+      cachedInputTokens
+    );
+
+    console.log(
+      "💬 OUTPUT TOKENS:",
+      outputTokens
+    );
+
+    console.log(
+      "📊 TOTAL TOKENS:",
+      totalTokens
     );
 
     return res.json({
       reply,
+
       finishReason:
         incompleteReason ||
         responseStatus,
 
       responseStatus,
+
       incompleteReason,
-      replyLength: reply.length,
+
+      replyLength:
+        reply.length,
+
       maxTokens,
+
       model:
         response.model ||
-        CHAT_MODEL
+        selectedModel.model,
+
+      modelTier:
+        selectedModel.tier,
+
+      usage: {
+        inputTokens,
+        cachedInputTokens,
+        outputTokens,
+        totalTokens
+      }
     });
   } catch (error) {
     console.log(
@@ -397,108 +690,158 @@ ${systemPrompt || ""}
       error
     );
 
-    return res.status(500).json({
-      reply:
-        "服务器错误：" +
-        (error?.message || "未知错误"),
-
-      error:
-        error?.message || "未知错误",
-
-      status:
+    return res
+      .status(
         error?.status || 500
-    });
+      )
+      .json({
+        reply:
+          "服务器错误：" +
+          (
+            error?.message ||
+            "未知错误"
+          ),
+
+        error:
+          error?.message ||
+          "未知错误",
+
+        status:
+          error?.status || 500,
+
+        model:
+          selectedModel.model,
+
+        modelTier:
+          selectedModel.tier
+      });
   }
 });
 
-app.get("/web-search", async (req, res) => {
-  try {
-    const query = req.query.q;
+app.get(
+  "/web-search",
+  async (req, res) => {
+    try {
+      const query =
+        req.query.q;
 
-    if (
-      !query ||
-      String(query).trim().length === 0
-    ) {
-      return res.status(400).json({
-        error: "Missing query"
-      });
-    }
+      if (
+        !query ||
+        String(query)
+          .trim()
+          .length === 0
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Missing query"
+          });
+      }
 
-    if (!process.env.TAVILY_API_KEY) {
-      return res.status(500).json({
-        error:
-          "Missing TAVILY_API_KEY in .env"
-      });
-    }
+      if (
+        !process.env
+          .TAVILY_API_KEY
+      ) {
+        return res
+          .status(500)
+          .json({
+            error:
+              "Missing TAVILY_API_KEY in .env"
+          });
+      }
 
-    const cleanQuery =
-      String(query).trim();
+      const cleanQuery =
+        String(query).trim();
 
-    const tavilyResponse =
-      await axios.post(
-        "https://api.tavily.com/search",
-        {
-          query: cleanQuery,
-          search_depth: "basic",
-          max_results: 5,
-          include_answer: true,
-          include_raw_content: false
-        },
-        {
-          headers: {
-            "Content-Type":
-              "application/json",
+      const tavilyResponse =
+        await axios.post(
+          "https://api.tavily.com/search",
 
-            Authorization:
-              `Bearer ${process.env.TAVILY_API_KEY}`
+          {
+            query: cleanQuery,
+
+            search_depth:
+              "basic",
+
+            max_results: 5,
+
+            include_answer:
+              true,
+
+            include_raw_content:
+              false
           },
 
-          timeout: 12000
-        }
-      );
+          {
+            headers: {
+              "Content-Type":
+                "application/json",
 
-    const rawResults =
-      tavilyResponse.data?.results || [];
+              Authorization:
+                `Bearer ${process.env.TAVILY_API_KEY}`
+            },
 
-    const results =
-      rawResults.map((item) => ({
-        title:
-          item.title || "Untitled",
+            timeout: 12000
+          }
+        );
 
-        snippet:
-          item.content ||
-          item.snippet ||
+      const rawResults =
+        tavilyResponse
+          .data
+          ?.results || [];
+
+      const results =
+        rawResults.map(
+          (item) => ({
+            title:
+              item.title ||
+              "Untitled",
+
+            snippet:
+              item.content ||
+              item.snippet ||
+              "",
+
+            url:
+              item.url || ""
+          })
+        );
+
+      return res.json({
+        query: cleanQuery,
+
+        answer:
+          tavilyResponse
+            .data
+            ?.answer ||
           "",
 
-        url:
-          item.url || ""
-      }));
+        results
+      });
+    } catch (error) {
+      console.error(
+        "WEB_SEARCH_ERROR:",
 
-    return res.json({
-      query: cleanQuery,
+        error.response
+          ?.data ||
+          error.message
+      );
 
-      answer:
-        tavilyResponse.data?.answer ||
-        "",
+      return res
+        .status(500)
+        .json({
+          error:
+            "Search failed",
 
-      results
-    });
-  } catch (error) {
-    console.error(
-      "WEB_SEARCH_ERROR:",
-      error.response?.data ||
-      error.message
-    );
-
-    return res.status(500).json({
-      error: "Search failed",
-
-      detail:
-        error.response?.data ||
-        error.message
-    });
+          detail:
+            error.response
+              ?.data ||
+            error.message
+        });
+    }
   }
-});
+);
 
 const PORT =
   process.env.PORT || 3000;
@@ -509,6 +852,25 @@ app.listen(
   () => {
     console.log(
       `Server running on http://0.0.0.0:${PORT}`
+    );
+
+    console.log(
+      "🧠 DEFAULT MODEL TIER:",
+      DEFAULT_MODEL_TIER
+    );
+
+    console.log(
+      "🤖 CORE MODEL:",
+      MODEL_CONFIG[
+        MODEL_TIER.CORE
+      ].chat
+    );
+
+    console.log(
+      "🚀 PREMIUM MODEL:",
+      MODEL_CONFIG[
+        MODEL_TIER.PREMIUM
+      ].chat
     );
   }
 );
